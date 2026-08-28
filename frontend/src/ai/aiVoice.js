@@ -1,5 +1,6 @@
 const LOCAL_REPLIES = {
   "open_app": (data) => `Opening ${data.app || "application"} for you.`,
+  "generate_dashboard_report": "Generating dashboard report.",
   "toggle_wifi_off": "Disconnecting network access.",
   "toggle_wifi_on": "Connection restored.",
   "take_screenshot": "Screenshot captured.",

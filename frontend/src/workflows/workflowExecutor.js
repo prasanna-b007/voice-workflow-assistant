@@ -5,6 +5,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { generateVoiceReply } from "../ai/aiVoice";
 import { speakText } from "../voice/voiceUtils";
+import { generateDashboardReport } from "../ai/aiReportGenerator";
+import { analyzeCurrentScreen } from "../ai/screenAnalyzer";
+import { openReportInNotepad } from "../ai/notepadAutomation";
 
 /* ────────────────────────────────────────────
    Shared App Name → Process Name Map
@@ -62,6 +65,8 @@ const APP_PROCESS_MAP = {
   "steam": "steam",
 };
 
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 export async function executeWorkflow(command) {
   if (!command) return;
 
@@ -107,6 +112,88 @@ export async function executeWorkflow(command) {
       await executeWorkflow({ action: "speak_text", data: { text: reply } });
     } catch (e) { console.error("Natural reply failed", e); }
   };
+
+  // ── Screen Report (Professional AI Pipeline) ────────────────────────────────
+  if (action === "analyze_screen_report") {
+    const autoSave = command.autoSave || data.autoSave || command.save || data.save || false;
+
+    // Acknowledge
+    await executeWorkflow({ action: "speak_text", data: { text: "Analyzing current screen." } });
+
+    try {
+      const { report: reportText, source } = await analyzeCurrentScreen();
+
+      if (!reportText) throw new Error("Report generation failed.");
+
+      // Context-aware voice status
+      const statusMsg = source === "cache"
+        ? "Retrieving latest analysis."
+        : source === "vision" || source === "dom" || source === "ocr"
+        ? "Generating detailed report."
+        : "Producing summary report.";
+      
+      await executeWorkflow({ action: "speak_text", data: { text: statusMsg } });
+
+      console.info(`[workflowExecutor] Screen report source: ${source}`);
+
+      // Paste to Notepad
+      await openReportInNotepad(reportText, autoSave);
+
+      // Final confirmation
+      const finalMsg = source === "none" 
+        ? "Screen analysis completed with summary." 
+        : "Screen report generated successfully.";
+      
+      await executeWorkflow({ action: "speak_text", data: { text: finalMsg } });
+    } catch (e) {
+      console.error("Screen report generation failed:", e);
+      await executeWorkflow({
+        action: "speak_text",
+        data: { text: "I'm sorry, I'm unable to analyze the screen right now. Please try again in a moment." },
+      });
+    }
+    return;
+  }
+
+
+  // 1.5 Dashboard Reporting
+  if (action === "generate_dashboard_report") {
+    confirmAction(action, {}, aiReply || "Generating dashboard report.");
+    
+    try {
+      // Hide Sonix overlay so we can interact with the dashboard underneath
+      const win = getCurrentWindow();
+      await win.hide();
+
+      // Emulate Ctrl+A (Select All) and Ctrl+C (Copy) to grab the dashboard's text
+      await invoke("system_control_raw", { 
+        script: "$wshell = New-Object -ComObject WScript.Shell; Start-Sleep -m 350; $wshell.SendKeys('^a'); Start-Sleep -m 300; $wshell.SendKeys('^c'); Start-Sleep -m 100; $wshell.SendKeys('{ESC}');" 
+      });
+
+      // Give the system clipboard time to populate
+      await wait(800);
+
+      // Extract data securely from the clipboard
+      const clipboardText = await invoke("get_clipboard_text");
+
+      // Generate the report using Gemini with the raw clipboard text
+      const reportText = await generateDashboardReport({ rawTextPreview: clipboardText });
+
+      if (command.autoSave || data.autoSave || command.save || data.save) {
+        await invoke("save_dashboard_report", { report: reportText });
+      }
+
+      await executeWorkflow({ action: "open_app", data: { app: "notepad" } });
+      await wait(900);
+      await executeWorkflow({ action: "type_text", data: { text: reportText, app: "notepad" } });
+      await wait(300);
+      await executeWorkflow({ action: "speak_text", data: { text: "Dashboard report generated successfully." } });
+    } catch (e) {
+      console.error("Dashboard report generation failed:", e);
+      await executeWorkflow({ action: "speak_text", data: { text: "Failed to generate dashboard report." } });
+    }
+    return;
+  }
 
   // 2. Navigation & Basic Control
   if (action === "go_back" || action === "close_tab" || action === "close_overlay") {
@@ -244,14 +331,14 @@ export async function executeWorkflow(command) {
 
   if (action === "schedule_meeting") {
     const calUrl = buildCalendarUrl(meetingTitle, dateStr, timeStr);
-    try { await openUrl(calUrl); } catch (e) { await open(calUrl); }
+    try { await openUrl(calUrl); } catch { await open(calUrl); }
     return;
   }
 
   if (action === "create_task" || action === "create_reminder") {
     saveTask({ task, date: dateStr, time: timeStr, priority: "normal" });
     const calUrl = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(task || "New Task")}`;
-    try { await openUrl(calUrl); } catch (e) { await open(calUrl); }
+    try { await openUrl(calUrl); } catch { await open(calUrl); }
     return;
   }
 
@@ -309,7 +396,9 @@ export async function executeWorkflow(command) {
     try {
       const win = getCurrentWindow();
       await win.hide();
-    } catch (e) { }
+    } catch {
+      console.warn("Could not hide assistant window before opening email.");
+    }
 
     const targetRecipient = to || data.to || "";
     const subjectLine = subject || "Message from Sonix";
@@ -323,11 +412,11 @@ export async function executeWorkflow(command) {
     try {
       // Step 1: Try the specialized opener plugin
       await openUrl(mailto);
-    } catch (e) {
+    } catch {
       try {
         // Step 2: Try the native Windows "start" command via our Rust backend
         await invoke("open_app", { appName: mailto });
-      } catch (err2) {
+      } catch {
         // Step 3: Last resort shell open
         await open(mailto);
       }
@@ -336,7 +425,7 @@ export async function executeWorkflow(command) {
     if (action === "email_and_schedule") {
       setTimeout(async () => {
         const calUrl = buildCalendarUrl(meetingTitle, dateStr, timeStr);
-        try { await openUrl(calUrl); } catch (e) { await open(calUrl); }
+        try { await openUrl(calUrl); } catch { await open(calUrl); }
       }, 500);
     }
     return;
@@ -353,14 +442,14 @@ export async function executeWorkflow(command) {
     const q = data.query || command.query || task || "";
     confirmAction(action, { query: q }, aiReply);
     const url = `https://www.youtube.com/results?search_query=${encodeURIComponent(q)}`;
-    try { await openUrl(url); } catch (e) { await open(url); }
+    try { await openUrl(url); } catch { await open(url); }
     return;
   }
 
   if (action === "search_file") {
     const query = data.query || task || "";
     const uri = `search-ms:query=${encodeURIComponent(query)}`;
-    try { await openUrl(uri); } catch (e) { await open(uri); }
+    try { await openUrl(uri); } catch { await open(uri); }
     return;
   }
 
@@ -469,7 +558,7 @@ export async function executeWorkflow(command) {
     } catch (e) { console.error("Calc failed", e); }
     return;
   }
-  if (action === "open_url") { try { await openUrl(data.url || task); } catch (e) { await open(data.url || task); } return; }
+  if (action === "open_url") { try { await openUrl(data.url || task); } catch { await open(data.url || task); } return; }
 
   console.log("No workflow matched for action:", action);
 }

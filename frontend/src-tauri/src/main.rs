@@ -4,6 +4,9 @@
 use tauri::Manager;
 use tauri::Emitter;
 use tauri_plugin_global_shortcut::{Builder as ShortcutBuilder, GlobalShortcutExt, ShortcutState};
+use std::fs;
+use std::path::PathBuf;
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 
 #[tauri::command]
 fn open_app(app_name: String) -> Result<String, String> {
@@ -97,6 +100,37 @@ fn close_app(app_name: String) -> Result<String, String> {
 #[tauri::command]
 fn type_text(text: String, app_name: String) -> Result<String, String> {
     println!("type_text command triggered for app: {} with text: {}", app_name, text);
+
+    if text.len() > 200 || text.contains('\n') || text.contains('\r') {
+        let temp_path = std::env::temp_dir().join("sonix_report_clipboard.txt");
+        fs::write(&temp_path, &text)
+            .map_err(|e| format!("Failed to prepare clipboard text: {}", e))?;
+
+        let temp_path_str = temp_path.to_string_lossy().replace('\'', "''");
+        let app_activation = if !app_name.is_empty() {
+            format!("if ($wshell.AppActivate('{}')) {{ Start-Sleep -m 250; }}", app_name.replace('\'', "''"))
+        } else {
+            "".to_string()
+        };
+
+        let ps_script = format!(
+            "$wshell = New-Object -ComObject WScript.Shell; \
+             $text = Get-Content -Raw -LiteralPath '{}'; \
+             Set-Clipboard -Value $text; \
+             {} \
+             Start-Sleep -m 150; \
+             $wshell.SendKeys('^v');",
+            temp_path_str, app_activation
+        );
+
+        return match std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", &ps_script])
+            .spawn()
+        {
+            Ok(_) => Ok(format!("Pasted message in {}", app_name)),
+            Err(e) => Err(format!("Failed to paste text: {}", e)),
+        };
+    }
     
     // Escaping special characters for SendKeys: { } [ ] ( ) + ^ % ~
     let escaped_text = text
@@ -132,6 +166,22 @@ fn type_text(text: String, app_name: String) -> Result<String, String> {
         Ok(_) => Ok(format!("Typed message in {}", app_name)),
         Err(e) => Err(format!("Failed to execute type command: {}", e)),
     }
+}
+
+#[tauri::command]
+fn save_dashboard_report(report: String) -> Result<String, String> {
+    let user_profile = std::env::var("USERPROFILE")
+        .map_err(|e| format!("Could not resolve user profile: {}", e))?;
+    let reports_dir = PathBuf::from(user_profile).join("Desktop").join("reports");
+
+    fs::create_dir_all(&reports_dir)
+        .map_err(|e| format!("Could not create reports directory: {}", e))?;
+
+    let report_path = reports_dir.join("dashboard_report.txt");
+    fs::write(&report_path, report)
+        .map_err(|e| format!("Could not save dashboard report: {}", e))?;
+
+    Ok(report_path.to_string_lossy().to_string())
 }
 
 #[tauri::command]
@@ -441,6 +491,79 @@ fn system_control_raw(script: String) -> Result<String, String> {
     }
 }
 
+#[tauri::command]
+fn get_clipboard_text() -> Result<String, String> {
+    match std::process::Command::new("powershell")
+        .args(["-Command", "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Get-Clipboard"])
+        .output()
+    {
+        Ok(output) => {
+            let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            Ok(text)
+        },
+        Err(e) => Err(format!("Failed to read clipboard: {}", e)),
+    }
+}
+
+/// Captures the entire primary screen (all monitors joined) and returns a
+/// Base64-encoded JPEG string that can be sent directly to Gemini Vision as
+/// `inlineData { mimeType: "image/jpeg", data: <return value> }`.
+#[tauri::command]
+fn capture_screenshot() -> Result<String, String> {
+    use screenshots::Screen;
+    use image::ImageFormat;
+    use std::io::Cursor;
+
+    // Grab all available screens; fall back to just the primary if enumeration fails
+    let screens = Screen::all().map_err(|e| format!("Failed to enumerate screens: {}", e))?;
+
+    if screens.is_empty() {
+        return Err("No screens found.".to_string());
+    }
+
+    // Use the first screen (primary monitor).  For multi-monitor support we
+    // could stitch them together, but a single-screen capture is the most
+    // reliable for AI analysis.
+    let screen = &screens[0];
+    let capture = screen.capture().map_err(|e| format!("Screen capture failed: {}", e))?;
+
+    // capture is an image::ImageBuffer<image::Rgba<u8>, Vec<u8>>
+    let width = capture.width();
+    let height = capture.height();
+    let raw_pixels = capture.into_raw(); // consumes the buffer, gives Vec<u8>
+
+    // Build RgbaImage from raw pixels
+    let rgba_image = image::RgbaImage::from_raw(width, height, raw_pixels)
+        .ok_or_else(|| "Failed to construct RGBA image from capture.".to_string())?;
+
+    let rgb_image = image::DynamicImage::ImageRgba8(rgba_image).to_rgb8();
+
+    let mut jpeg_buf: Vec<u8> = Vec::new();
+    let mut cursor = Cursor::new(&mut jpeg_buf);
+    image::DynamicImage::ImageRgb8(rgb_image)
+        .write_to(&mut cursor, ImageFormat::Jpeg)
+        .map_err(|e| format!("Failed to encode JPEG: {}", e))?;
+
+    Ok(BASE64.encode(&jpeg_buf))
+}
+
+/// Saves a screen analysis report to Desktop/reports/screen_report.txt.
+#[tauri::command]
+fn save_screen_report(report: String) -> Result<String, String> {
+    let user_profile = std::env::var("USERPROFILE")
+        .map_err(|e| format!("Could not resolve user profile: {}", e))?;
+    let reports_dir = PathBuf::from(user_profile).join("Desktop").join("reports");
+
+    fs::create_dir_all(&reports_dir)
+        .map_err(|e| format!("Could not create reports directory: {}", e))?;
+
+    let report_path = reports_dir.join("screen_report.txt");
+    fs::write(&report_path, report)
+        .map_err(|e| format!("Could not save screen report: {}", e))?;
+
+    Ok(report_path.to_string_lossy().to_string())
+}
+
 fn main() {
     tauri::Builder::default()
         // Enable opener plugin
@@ -486,7 +609,7 @@ fn main() {
                     Ok(())
                 })
         // Register command handlers
-        .invoke_handler(tauri::generate_handler![open_app, save_in_app, close_app, type_text, system_control, system_control_raw])
+        .invoke_handler(tauri::generate_handler![open_app, save_in_app, close_app, type_text, save_dashboard_report, save_screen_report, capture_screenshot, system_control, system_control_raw, get_clipboard_text])
         // Run app
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

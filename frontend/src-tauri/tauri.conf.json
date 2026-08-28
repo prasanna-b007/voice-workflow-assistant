@@ -15,7 +15,7 @@
       {
         "label": "main",
         "title": "Voice Workflow Assistant",
-        "url": "http://localhost:5173"
+        "url": "index.html"
       },
       {
         "label": "assistant",

@@ -8,6 +8,7 @@ import { speakText } from "../voice/voiceUtils";
 import { generateDashboardReport } from "../ai/aiReportGenerator";
 import { analyzeCurrentScreen } from "../ai/screenAnalyzer";
 import { openReportInNotepad } from "../ai/notepadAutomation";
+import { evaluateExpression } from "../utils/safeMath";
 
 /* ────────────────────────────────────────────
    Shared App Name → Process Name Map
@@ -553,9 +554,12 @@ export async function executeWorkflow(command) {
   if (action === "get_weather") { await openUrl("https://www.google.com/search?q=weather"); return; }
   if (action === "calculate") {
     try {
-      const res = eval((data.expression || task).replace(/[^-()\d/*+.]/g, ''));
+      const res = evaluateExpression(data.expression || task);
       await executeWorkflow({ action: "speak_text", data: { text: `The answer is ${res}` } });
-    } catch (e) { console.error("Calc failed", e); }
+    } catch (e) {
+      console.error("Calc failed", e);
+      await executeWorkflow({ action: "speak_text", data: { text: "I couldn't work that one out." } });
+    }
     return;
   }
   if (action === "open_url") { try { await openUrl(data.url || task); } catch { await open(data.url || task); } return; }

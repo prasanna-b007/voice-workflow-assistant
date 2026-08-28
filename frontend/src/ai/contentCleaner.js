@@ -63,6 +63,9 @@ const BROWSER_UI_PATTERNS = [
   /^extracted\s+content\s+preview/i,
 
   // Pure symbol spam (no alphanumeric content)
+  // The Devanagari and Tamil ranges deliberately include combining marks, so
+  // treating them as standalone class members is the intended behaviour here.
+  // eslint-disable-next-line no-misleading-character-class
   /^[^a-zA-Z0-9\u0900-\u097F\u0B80-\u0BFF]+$/,
 
   // Copyright / legal boilerplate
@@ -104,9 +107,10 @@ function isBrowserNoise(line) {
   if (GLOBAL_BOILERPLATE.has(trimmed.toLowerCase())) return true;
 
   // Single token under 3 chars is almost always noise unless it's a number
-  if (trimmed.length < 3 && !/^\d+[\.,]?\d*$/.test(trimmed)) return true;
+  if (trimmed.length < 3 && !/^\d+[.,]?\d*$/.test(trimmed)) return true;
 
   // Pure punctuation spam (>70% non-alphanumeric)
+  // eslint-disable-next-line no-misleading-character-class -- combining marks are intentional (see above)
   const alphanum = (trimmed.match(/[a-zA-Z0-9\u0900-\u097F\u0B80-\u0BFF]/g) || []).length;
   if (trimmed.length > 3 && alphanum / trimmed.length < 0.3) return true;
 
@@ -185,7 +189,7 @@ export function stripBrowserChromeHeader(text) {
       isBrowserTabBarLine(t) ||                       // tab bar
       /\b\w+\.(gov|com|org|edu|in|io|net)\b.*\//.test(t) || // address bar (URL)
       /^[^a-zA-Z0-9]{0,3}\s*[a-zA-Z]{1,3}\s*[^a-zA-Z0-9]{0,3}$/.test(t) || // short noise
-      (t.length < 20 && /[\[\]{}<>@#|\\]/.test(t));  // icon/toolbar noise
+      (t.length < 20 && /[[\]{}<>@#|\\]/.test(t));  // icon/toolbar noise
 
     if (isChromeLine) {
       if (contentLinesSeen === 0) startIdx = i + 1; // keep moving start past chrome

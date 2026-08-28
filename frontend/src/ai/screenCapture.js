@@ -15,7 +15,7 @@ export async function captureScreen() {
   try {
     win = getCurrentWindow();
     await win.hide();
-  } catch (_) {
+  } catch {
     // Non-fatal – continue even if hide fails
   }
 
@@ -37,7 +37,7 @@ export async function captureScreen() {
       try {
         await win.show();
         await win.setFocus();
-      } catch (_) {}
+      } catch { /* overlay may already be gone */ }
     }
   }
 }

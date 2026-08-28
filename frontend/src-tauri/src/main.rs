@@ -564,6 +564,94 @@ fn save_screen_report(report: String) -> Result<String, String> {
     Ok(report_path.to_string_lossy().to_string())
 }
 
+/// Resolves the Gemini API key at runtime.
+///
+/// Deliberately *not* read from the frontend: Vite inlines VITE_-prefixed
+/// variables into the JS bundle, so a key used from JavaScript ships inside the
+/// installer and is trivially extractable. Order of preference:
+///   1. the GEMINI_API_KEY environment variable
+///   2. `gemini_api_key` in <app config dir>/config.json
+fn resolve_gemini_key(app: &tauri::AppHandle) -> Result<String, String> {
+    if let Ok(key) = std::env::var("GEMINI_API_KEY") {
+        if !key.trim().is_empty() {
+            return Ok(key.trim().to_string());
+        }
+    }
+
+    let config_path = app
+        .path()
+        .app_config_dir()
+        .map_err(|e| format!("Could not resolve config directory: {}", e))?
+        .join("config.json");
+
+    let raw = fs::read_to_string(&config_path).map_err(|_| {
+        format!(
+            "No Gemini API key configured. Set the GEMINI_API_KEY environment variable, or create {} containing {{\"gemini_api_key\": \"...\"}}.",
+            config_path.display()
+        )
+    })?;
+
+    let parsed: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|e| format!("{} is not valid JSON: {}", config_path.display(), e))?;
+
+    parsed
+        .get("gemini_api_key")
+        .and_then(|k| k.as_str())
+        .map(|k| k.trim().to_string())
+        .filter(|k| !k.is_empty())
+        .ok_or_else(|| format!("{} has no \"gemini_api_key\" value.", config_path.display()))
+}
+
+/// Whether a key is configured. The frontend calls this once to decide whether
+/// to attempt an AI call or go straight to its offline fallback.
+#[tauri::command]
+fn gemini_key_available(app: tauri::AppHandle) -> bool {
+    resolve_gemini_key(&app).is_ok()
+}
+
+/// Proxies a generateContent request to Gemini and returns the raw JSON response,
+/// so callers on the JS side keep working with the shape the REST API returns.
+#[tauri::command]
+async fn call_gemini(
+    app: tauri::AppHandle,
+    model: String,
+    body: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    // The model name is interpolated into the URL path, so keep it to the
+    // characters Google actually uses in model ids.
+    if model.is_empty()
+        || !model
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.')
+    {
+        return Err(format!("Invalid Gemini model name: {}", model));
+    }
+
+    let api_key = resolve_gemini_key(&app)?;
+
+    let url = format!(
+        "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent",
+        model
+    );
+
+    // Sent as a header rather than a query parameter so the key stays out of
+    // request logs and error messages.
+    let response = reqwest::Client::new()
+        .post(&url)
+        .header("x-goog-api-key", api_key)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Gemini request failed: {}", e))?;
+
+    let status = response.status();
+
+    response
+        .json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("Gemini returned a non-JSON response (HTTP {}): {}", status, e))
+}
+
 fn main() {
     tauri::Builder::default()
         // Enable opener plugin
@@ -609,7 +697,7 @@ fn main() {
                     Ok(())
                 })
         // Register command handlers
-        .invoke_handler(tauri::generate_handler![open_app, save_in_app, close_app, type_text, save_dashboard_report, save_screen_report, capture_screenshot, system_control, system_control_raw, get_clipboard_text])
+        .invoke_handler(tauri::generate_handler![open_app, save_in_app, close_app, type_text, save_dashboard_report, save_screen_report, capture_screenshot, system_control, system_control_raw, get_clipboard_text, call_gemini, gemini_key_available])
         // Run app
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

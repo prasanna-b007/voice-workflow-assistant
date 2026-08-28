@@ -7,6 +7,11 @@ export default defineConfig({
   server: {
     port: 1420,
     strictPort: true,
+    watch: {
+      // Without this the dev server tries to watch src-tauri/target and dies with
+      // EBUSY the moment cargo locks the freshly built app.exe.
+      ignored: ['**/src-tauri/**'],
+    },
   },
   build: {
     rollupOptions: {

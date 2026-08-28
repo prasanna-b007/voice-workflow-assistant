@@ -101,7 +101,7 @@ export function stopWakeWordListener() {
       recognition.stop();
       isStarted = false;
       console.log("Wake word listener requested stop.");
-    } catch (e) {
+    } catch {
       // ignore
     }
   }

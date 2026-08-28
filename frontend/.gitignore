@@ -22,3 +22,9 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Local scratch / test artifacts
+temp_test.js
+run_test.js
+test_*.exe
+test_*.pdb

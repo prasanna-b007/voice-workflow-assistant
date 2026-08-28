@@ -1,3 +1,4 @@
+import { callGemini, geminiAvailable } from "./geminiConfig";
 /**
  * visionAnalyzer.js
  * ─────────────────
@@ -56,8 +57,9 @@ Warnings:
  * @returns {Promise<string>}  Plain-text report (clean UTF-8)
  */
 export async function analyzeScreenWithGemini(base64Jpeg) {
-  const API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
-  if (!API_KEY) throw new Error("Missing VITE_GEMINI_API_KEY.");
+  if (!(await geminiAvailable())) {
+    throw new Error("No Gemini API key configured.");
+  }
 
   const body = {
     contents: [
@@ -80,14 +82,7 @@ export async function analyzeScreenWithGemini(base64Jpeg) {
     },
   };
 
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${API_KEY}`,
-    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }
-  );
-
-  let json;
-  try { json = await res.json(); }
-  catch { throw new Error(`Vision API HTTP ${res.status}: ${res.statusText}`); }
+  const json = await callGemini(body);
 
   if (json?.error) {
     const msg = json.error.message || "";

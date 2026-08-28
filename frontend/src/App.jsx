@@ -22,66 +22,6 @@ function App() {
     statusRef.current = status;
   }, [status]);
 
-  useEffect(() => {
-    // Listen for custom trigger event from Rust
-    let unlistenShortcut = null;
-    getCurrentWindow().listen("trigger-assistant", (event) => {
-      const newMode = event.payload || "workflow";
-      setMode(newMode);
-      modeRef.current = newMode;
-      
-      // startListeningAuto will handle initial setup
-      startListeningAuto(newMode === "dictation");
-    }).then(u => { unlistenShortcut = u; });
-
-    // Initialize Wake Word Listener
-    initWakeWordListener((detectedMode = "workflow") => {
-      // On wake word heard
-      if (statusRef.current === "idle") {
-         playWakeChime(); // Play the premium ping sound
-         
-         setMode(detectedMode);
-         modeRef.current = detectedMode;
-         
-         const isDictation = detectedMode === "dictation";
-         startListeningAuto(isDictation);
-         
-         // Response varies by mode for a premium feel
-         if (isDictation) {
-           speakText("Ready to type.");
-         } else {
-           speakText("I'm here.");
-         }
-         
-         getCurrentWindow().show().catch(() => {});
-         getCurrentWindow().setFocus().catch(() => {});
-      }
-    });
-    startWakeWordListener();
-
-    const handleKeyDown = async (e) => {
-      if (e.key === "Escape") {
-        await escapeOverlay();
-      } else if (e.key === "Enter" && modeRef.current === "dictation") {
-        if (textRef.current) {
-          handleResult(textRef.current, true);
-        }
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-
-    // Warm up the speech engine
-    if (window.speechSynthesis) {
-      const warmup = new SpeechSynthesisUtterance("");
-      window.speechSynthesis.speak(warmup);
-    }
-
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-      stopWakeWordListener();
-      if (unlistenShortcut) unlistenShortcut();
-    };
-  }, []);
 
   const startListeningAuto = (isDictation = false) => {
     // Pause wake word listener while the assistant is active to avoid resource conflicts
@@ -178,8 +118,74 @@ function App() {
     
     try {
       await getCurrentWindow().hide();
-    } catch (e) { }
+    } catch { /* window may already be hidden */ }
   };
+
+  // Mounted last so the handlers it closes over are already initialised.
+  useEffect(() => {
+    // Listen for custom trigger event from Rust
+    let unlistenShortcut = null;
+    getCurrentWindow().listen("trigger-assistant", (event) => {
+      const newMode = event.payload || "workflow";
+      setMode(newMode);
+      modeRef.current = newMode;
+      
+      // startListeningAuto will handle initial setup
+      startListeningAuto(newMode === "dictation");
+    }).then(u => { unlistenShortcut = u; });
+
+    // Initialize Wake Word Listener
+    initWakeWordListener((detectedMode = "workflow") => {
+      // On wake word heard
+      if (statusRef.current === "idle") {
+         playWakeChime(); // Play the premium ping sound
+         
+         setMode(detectedMode);
+         modeRef.current = detectedMode;
+         
+         const isDictation = detectedMode === "dictation";
+         startListeningAuto(isDictation);
+         
+         // Response varies by mode for a premium feel
+         if (isDictation) {
+           speakText("Ready to type.");
+         } else {
+           speakText("I'm here.");
+         }
+         
+         getCurrentWindow().show().catch(() => {});
+         getCurrentWindow().setFocus().catch(() => {});
+      }
+    });
+    startWakeWordListener();
+
+    const handleKeyDown = async (e) => {
+      if (e.key === "Escape") {
+        await escapeOverlay();
+      } else if (e.key === "Enter" && modeRef.current === "dictation") {
+        if (textRef.current) {
+          handleResult(textRef.current, true);
+        }
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+
+    // Warm up the speech engine
+    if (window.speechSynthesis) {
+      const warmup = new SpeechSynthesisUtterance("");
+      window.speechSynthesis.speak(warmup);
+    }
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      stopWakeWordListener();
+      if (unlistenShortcut) unlistenShortcut();
+    };
+    // Mount-once on purpose: re-running this would re-register the global
+    // shortcut listener and restart the wake-word recogniser on every render,
+    // which fights the microphone. The handlers read live state through refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <div className={`overlay-container ${status}`}>

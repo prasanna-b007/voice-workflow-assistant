@@ -1,3 +1,4 @@
+import { callGemini, geminiAvailable } from "./geminiConfig";
 const LOCAL_REPLIES = {
   "open_app": (data) => `Opening ${data.app || "application"} for you.`,
   "generate_dashboard_report": "Generating dashboard report.",
@@ -19,8 +20,7 @@ export async function generateVoiceReply(action, data = {}) {
     return typeof LOCAL_REPLIES[key] === "function" ? LOCAL_REPLIES[key](data) : LOCAL_REPLIES[key];
   }
 
-  const API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
-  if (!API_KEY) {
+  if (!(await geminiAvailable())) {
     console.error("Gemini API Key not found for voice reply generation.");
     return `Performing ${action.replace(/_/g, ' ')}`;
   }
@@ -74,22 +74,13 @@ Data: ${JSON.stringify(data)}
 `;
 
   try {
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${API_KEY}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: {
-            temperature: 0.7,
-            maxOutputTokens: 50,
-          }
-        }),
+    const result = await callGemini({
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: {
+        temperature: 0.7,
+        maxOutputTokens: 50,
       }
-    );
-
-    const result = await response.json();
+    });
     const reply = result.candidates?.[0]?.content?.parts?.[0]?.text || `Ok, ${action.replace(/_/g, ' ')}`;
     return reply.trim();
   } catch (error) {

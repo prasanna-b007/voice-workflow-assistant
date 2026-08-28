@@ -21,7 +21,6 @@
  */
 export function generateProfessionalFallback(ctx) {
   const { category, entities, headings } = ctx;
-  const now = new Date().toLocaleString();
 
   // Curate "Detected Information" items from headings and entities
   // Filter out any noisy/short tokens

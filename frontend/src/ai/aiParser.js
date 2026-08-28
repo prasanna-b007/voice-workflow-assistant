@@ -1,3 +1,4 @@
+import { callGemini, geminiAvailable } from "./geminiConfig";
 export async function detectIntentWithGemini(text) {
   if (!text || text.trim().length === 0) {
     return null;
@@ -126,7 +127,6 @@ export async function detectIntentWithGemini(text) {
 
   if (/^(close|exit|quit)$/.test(command)) return { action: "close_app", app: "current" };
 
-  const API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
   const todayStr = new Date().toISOString().split("T")[0];
 
   const emptyIntent = {
@@ -145,7 +145,7 @@ export async function detectIntentWithGemini(text) {
     state: "",
   };
 
-  if (!API_KEY) return emptyIntent;
+  if (!(await geminiAvailable())) return emptyIntent;
 
   const prompt = `You are an advanced AI command parser for a voice assistant called Sonix.
 
@@ -200,18 +200,9 @@ Return exactly this JSON shape:
 
 User command: "${text}"`;
 
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${API_KEY}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-      }),
-    }
-  );
-
-  const data = await response.json();
+  const data = await callGemini({
+    contents: [{ parts: [{ text: prompt }] }],
+  });
   console.log("FULL GEMINI RESPONSE:", data);
 
   if (data?.error) {

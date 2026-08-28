@@ -1,5 +1,5 @@
-import { motion, useScroll, useTransform, useInView, useMotionValue, useSpring } from "framer-motion";
-import { useRef, useEffect, useCallback, useState } from "react";
+import { motion, useScroll, useTransform, useMotionValue, useSpring } from "framer-motion";
+import { useRef, useEffect, useCallback } from "react";
 import {
   Mic,
   MonitorPlay,
@@ -656,10 +656,18 @@ function GradientOrbs() {
    Constellation Divider (decorative section separator)
    ──────────────────────────────────────────── */
 function ConstellationDivider({ flip = false }) {
+  // Seeded rather than Math.random(): the divider is decorative, but calling an
+  // impure function during render makes the output flicker on every re-render.
+  const seeded = (n) => {
+    const x = Math.sin(n * 12.9898) * 43758.5453;
+    return x - Math.floor(x);
+  };
+
   const dots = Array.from({ length: 12 }, (_, i) => ({
     x: 5 + (i * 90 / 11),
-    size: Math.random() > 0.7 ? 3 : 1.5,
-    isBright: Math.random() > 0.6,
+    size: seeded(i) > 0.7 ? 3 : 1.5,
+    isBright: seeded(i + 100) > 0.6,
+    connects: seeded(i + 200) > 0.3,
   }));
 
   return (
@@ -680,7 +688,7 @@ function ConstellationDivider({ flip = false }) {
               </circle>
             )}
             {/* Connection lines between some dots */}
-            {i < dots.length - 1 && Math.random() > 0.3 && (
+            {i < dots.length - 1 && d.connects && (
               <line 
                 x1={d.x} y1={20} 
                 x2={dots[i + 1].x} y2={20} 
@@ -1105,8 +1113,6 @@ function Footer() {
 function MouseFollower() {
   const mouseX = useMotionValue(0);
   const mouseY = useMotionValue(0);
-
-  const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
 
   const springConfig = { damping: 40, stiffness: 200 };
   const springX = useSpring(mouseX, springConfig);

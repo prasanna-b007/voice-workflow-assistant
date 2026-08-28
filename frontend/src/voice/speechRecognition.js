@@ -32,7 +32,7 @@ export function startRecognition(onResult, onError, isDictation = false) {
   recognition.continuous = !!isDictation;
 
   if (isListening) {
-    try { recognition.abort(); } catch (_) { /* ignore */ }
+    try { recognition.abort(); } catch { /* ignore */ }
     isListening = false;
     setTimeout(() => startRecognition(onResult, onError, isDictation), 200);
     return;
@@ -95,7 +95,7 @@ export function startRecognition(onResult, onError, isDictation = false) {
 export function stopRecognition() {
   if (recognition && isListening) {
     stoppedIntentionally = true; // Signal that WE stopped it, not the user
-    try { recognition.abort(); } catch (_) { /* ignore */ }
+    try { recognition.abort(); } catch { /* ignore */ }
     isListening = false;
   }
 }

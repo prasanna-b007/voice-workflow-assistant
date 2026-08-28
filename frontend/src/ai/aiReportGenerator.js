@@ -1,3 +1,4 @@
+import { callGemini, geminiAvailable } from "./geminiConfig";
 /**
  * aiReportGenerator.js
  * ─────────────────────
@@ -12,22 +13,12 @@ import { detectContentContext, formatContextForPrompt } from "./smartContentDete
 // ─── Shared Gemini text helper ────────────────────────────────────────────────
 
 async function callGeminiText(prompt, maxTokens = 1800) {
-  const API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
-  if (!API_KEY) return null;
+  if (!(await geminiAvailable())) return null;
 
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${API_KEY}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.2, maxOutputTokens: maxTokens },
-      }),
-    }
-  );
-
-  const data = await res.json();
+  const data = await callGemini({
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: { temperature: 0.2, maxOutputTokens: maxTokens },
+  });
   if (data?.error) throw new Error(data.error.message || "Gemini text error");
 
   return data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || null;
@@ -104,8 +95,7 @@ ${formattedContext}`;
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 export async function generateDashboardReport(dashboardData) {
-  const API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
-  if (!API_KEY) return null;
+  if (!(await geminiAvailable())) return null;
 
   const prompt = `Generate a detailed dashboard report. 
 Include: Summary, Key Metrics, Insights, Recommendations, Warnings.
@@ -124,8 +114,7 @@ Data: ${JSON.stringify(dashboardData)}`;
  * Returns null on any failure to signal the orchestrator to try fallback.
  */
 export async function generateScreenReport(textContext) {
-  const API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
-  if (!API_KEY) return null;
+  if (!(await geminiAvailable())) return null;
 
   const ctx = detectContentContext(textContext);
   const prompt = buildDetailedPrompt(ctx);

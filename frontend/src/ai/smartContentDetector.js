@@ -127,7 +127,7 @@ function extractStats(text) {
     /₹\s*[\d,]+(?:\.\d+)?(?:\s*(?:crore|lakh|thousand|k|m|b))?/gi,
     /\$\s*[\d,]+(?:\.\d+)?(?:\s*(?:billion|million|thousand|k|m|b))?/gi,
     /\b\d{1,4}\s+(?:seats?|votes?|marks?|score|rank|position|total|count|won|leading)\b/gi,
-    /\b(?:total|count|score|rank|won|leading)\s*[:\-]?\s*\d[\d,]*/gi,
+    /\b(?:total|count|score|rank|won|leading)\s*[:-]?\s*\d[\d,]*/gi,
     /\b\d+\s+(?:students?|users?|sessions?|visits?|orders?|tickets?|constituencies|acs?)\b/gi,
   ];
 

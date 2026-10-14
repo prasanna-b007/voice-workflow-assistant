@@ -18,10 +18,14 @@ import {
 } from "lucide-react";
 
 /* ────────────────────────────────────────────
-   Download Helper 
+   Download Helper
    ──────────────────────────────────────────── */
+const REPO_URL = "https://github.com/prasanna-b007/voice-workflow-assistant";
+// Tag and filename must match the GitHub Release produced by `npm run tauri build`.
+const INSTALLER_URL = `${REPO_URL}/releases/download/v0.1.0/Sonix_0.1.0_x64-setup.exe`;
+
 const handleDownloadClick = () => {
-  fetch("https://github.com/Pranesh-I/voice-workflow-assistant/releases/download/v1.0/Nova_0.1.0_x64-setup.exe", { method: "HEAD" })
+  fetch(INSTALLER_URL, { method: "HEAD" })
     .catch(() => console.warn("Installer not found. Check release tag name."));
 };
 
@@ -874,7 +878,7 @@ function Hero() {
          
          <div className="flex flex-col sm:flex-row items-center justify-center gap-4 w-full px-4">
             <a 
-              href="https://github.com/Pranesh-I/voice-workflow-assistant/releases/download/v1.0/Nova_0.1.0_x64-setup.exe"
+              href={INSTALLER_URL}
               download
               onClick={handleDownloadClick}
               className="btn-primary group relative overflow-hidden py-3 px-8 text-[15px]"
@@ -1065,7 +1069,7 @@ function DownloadPanel() {
           </h2>
           
           <a
-            href="https://github.com/Pranesh-I/voice-workflow-assistant/releases/download/v1.0/Nova_0.1.0_x64-setup.exe"
+            href={INSTALLER_URL}
             download
             className="btn-primary inline-flex mx-auto relative z-10 text-lg px-12 py-5 group"
             onClick={handleDownloadClick}
@@ -1098,7 +1102,7 @@ function Footer() {
          <span className="tracking-wide text-[16px] font-bold text-transparent bg-clip-text bg-gradient-to-r from-energy-teal to-energy-violet group-hover:from-energy-violet group-hover:to-energy-teal transition-all duration-700">Sonix Virtual Assistant</span>
        </div>
        <div className="flex items-center gap-8">
-         <a href="https://github.com/Pranesh-I/voice-workflow-assistant" target="_blank" rel="noopener noreferrer" className="relative hover:text-energy-violet transition-colors duration-300 after:absolute after:bottom-[-4px] after:left-0 after:w-0 after:h-[2px] after:bg-energy-violet after:rounded-full hover:after:w-full after:transition-all after:duration-300 hover:scale-105">
+         <a href={REPO_URL} target="_blank" rel="noopener noreferrer" className="relative hover:text-energy-violet transition-colors duration-300 after:absolute after:bottom-[-4px] after:left-0 after:w-0 after:h-[2px] after:bg-energy-violet after:rounded-full hover:after:w-full after:transition-all after:duration-300 hover:scale-105">
             GitHub
          </a>
          <span className="opacity-60 cursor-default hover:opacity-100 hover:text-energy-teal transition-all duration-300">Crafted by Presadors</span>

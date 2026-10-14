@@ -30,7 +30,7 @@ export async function withRetry(fn, maxRetries = 1, delayMs = 1500) {
       
       // Don't retry on certain errors (e.g. invalid API key)
       const msg = err.message?.toLowerCase() || "";
-      if (msg.includes("api key not valid") || msg.includes("missing vite_gemini_api_key")) {
+      if (msg.includes("api key not valid") || msg.includes("no gemini api key configured")) {
         console.warn("[retryManager] Terminal error detected, skipping retries.");
         throw err;
       }

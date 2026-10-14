@@ -1,10 +1,10 @@
 [package]
 name = "app"
 version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
+description = "Sonix — voice workflow assistant for Windows"
+authors = ["prasanna-b007"]
 license = ""
-repository = ""
+repository = "https://github.com/prasanna-b007/voice-workflow-assistant"
 edition = "2021"
 rust-version = "1.77.2"
 

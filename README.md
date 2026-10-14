@@ -7,6 +7,21 @@ system settings, dictates text, analyses what's on screen, and files reports.
 Intent parsing runs a fast local rule engine first, falling back to **Google Gemini**
 for anything the rules don't cover.
 
+## Install (end users)
+
+1. Download `Sonix_<version>_x64-setup.exe` from the
+   [latest release](https://github.com/prasanna-b007/voice-workflow-assistant/releases/latest)
+   and run it.
+2. *(Optional, enables AI parsing and screen analysis)* get a Gemini API key at
+   <https://aistudio.google.com/apikey> and save it in
+   `%APPDATA%\com.voice.sonix\config.json`:
+
+   ```json
+   { "gemini_api_key": "your-key-here" }
+   ```
+
+   Without it, Sonix still works using its built-in local commands.
+
 ## Repository layout
 
 | Path | What it is |
@@ -56,6 +71,11 @@ local rule engine, and screen/dashboard analysis reports that it is unavailable.
 npm run tauri dev     # dev build with hot reload
 npm run tauri build   # packaged installer -> src-tauri/target/release/bundle/
 ```
+
+To publish a release, upload `src-tauri/target/release/bundle/nsis/Sonix_<version>_x64-setup.exe`
+to a GitHub Release tagged `v<version>`. The website's download links
+(`INSTALLER_URL` in `website/src/App.jsx`) point at that tag and filename, so update
+them whenever the version in `src-tauri/tauri.conf.json` changes.
 
 The Vite dev server runs on port **1420** (pinned via `strictPort`).
 

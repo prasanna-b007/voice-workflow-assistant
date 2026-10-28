@@ -1,126 +1,55 @@
 /**
- * screenAnalyzer.js — Smart Multi-Stage AI Pipeline (v2 Professional)
- * ──────────────────────────────────────────────────────────────────
- * Orchestrates: Capture -> Extraction -> Cleaning -> AI (with Retry) -> Fallback.
+ * screenAnalyzer.js
+ * ─────────────────
+ * Capture → Windows OCR → built-in report → insights from the built-in AI model.
+ * Everything runs offline. The report always works; the insights section is added
+ * when the model is downloaded and the PC can run it.
  */
 
+import { invoke } from "@tauri-apps/api/core";
 import { captureScreen } from "./screenCapture";
-import { extractTextFromDOM, domHasMeaningfulText } from "./textExtractor";
-import { extractTextViaOCR } from "./ocrExtractor";
-import { analyzeScreenWithGemini } from "./visionAnalyzer";
-import { generateScreenReport } from "./aiReportGenerator";
-import { generateProfessionalFallback } from "./fallbackReportGenerator";
-import { scoreContentQuality } from "./contentCleaner";
+import { cleanExtractedText } from "./contentCleaner";
 import { detectContentContext } from "./smartContentDetector";
-import { withRetry } from "./retryManager";
-import {
-  hashImage,
-  isScreenUnchanged,
-  setLastImageHash,
-  getCachedReport,
-  setCachedReport,
-  isOnCooldown,
-  cooldownRemainingSeconds,
-  recordGeminiCall,
-} from "./cacheManager";
+import { buildScreenReport, getScreenInsights } from "./screenReport";
+import { hashImage, isScreenUnchanged, setLastImageHash, getCachedReport, setCachedReport } from "./cacheManager";
 
-const MIN_EXTRACTED_CHARS = 60;
-const MIN_QUALITY_SCORE = 0.1;
+/** Text on the screenshot, cleaned of browser chrome and duplicates; "" if none. */
+async function readScreenText(imageBase64) {
+  try {
+    const raw = await invoke("ocr_image", { image: imageBase64 });
+    if (!raw?.trim()) return "";
+    // The cleaner can drop everything on a sparse screen; the raw text beats nothing.
+    return cleanExtractedText(raw) || raw.trim();
+  } catch (e) {
+    console.warn("[screenAnalyzer] OCR failed:", e);
+    return "";
+  }
+}
 
-export async function analyzeCurrentScreen(opts = {}) {
-  // 1. Capture
-  const base64Jpeg = await captureScreen();
-  const imageHash = await hashImage(base64Jpeg);
+/**
+ * @returns {Promise<{ report: string, foundText: boolean, hasInsights: boolean }>}
+ */
+export async function analyzeCurrentScreen() {
+  const image = await captureScreen();
 
-  // 2. Cache Check
+  // Same screen as a moment ago: reuse that report.
+  const imageHash = await hashImage(image);
   if (imageHash && isScreenUnchanged(imageHash)) {
     const cached = getCachedReport(imageHash);
-    if (cached) return { report: cached, source: "cache" };
+    if (cached) return cached;
   }
 
-  // 3. Cooldown Guard
-  if (isOnCooldown()) {
-    const secs = cooldownRemainingSeconds();
-    console.info(`[screenAnalyzer] ⏳ On cooldown — ${secs}s remaining`);
+  const text = await readScreenText(image);
+  const ctx = detectContentContext(text);
+  let report = buildScreenReport(ctx);
 
-    // Use cached if available
-    if (imageHash) {
-      const anyCached = getCachedReport(imageHash);
-      if (anyCached) return { report: anyCached, source: "cache" };
-    }
+  const insights = await getScreenInsights(ctx);
+  if (insights) report += `\n\nAI Insights\n-----------\n${insights}`;
 
-    // Otherwise generate professional fallback
-    const ctx = detectContentContext(extractedText || "System state check");
-    return { 
-      report: generateProfessionalFallback(ctx), 
-      source: "cache" 
-    };
-  }
-
-  // 4 & 5. Extraction (DOM or OCR)
-  let extractedText = null;
-  let source = "none";
-
-  // Try DOM
-  if (domHasMeaningfulText()) {
-    try {
-      const domText = await extractTextFromDOM(opts.clipboardText);
-      if (domText && scoreContentQuality(domText) >= MIN_QUALITY_SCORE) {
-        extractedText = domText;
-        source = "dom";
-      }
-    } catch (e) { console.warn("[screenAnalyzer] DOM extraction failed", e); }
-  }
-
-  // Try OCR if DOM failed
-  if (!extractedText) {
-    try {
-      const ocrText = await extractTextViaOCR(base64Jpeg);
-      if (ocrText && scoreContentQuality(ocrText) >= MIN_QUALITY_SCORE) {
-        extractedText = ocrText;
-        source = "ocr";
-      }
-    } catch (e) { console.warn("[screenAnalyzer] OCR extraction failed", e); }
-  }
-
-  let finalReport = null;
-
-  // 6. AI Attempt (with Retry)
-  if (extractedText) {
-    try {
-      console.info("[screenAnalyzer] Attempting AI Text Analysis...");
-      recordGeminiCall();
-      finalReport = await withRetry(() => generateScreenReport(extractedText), 1, 1200);
-    } catch (e) {
-      console.warn("[screenAnalyzer] AI Text Analysis failed after retries", e);
-    }
-  }
-
-  // 7. Vision Fallback (only if text AI failed or no text found)
-  if (!finalReport) {
-    try {
-      console.info("[screenAnalyzer] Attempting Gemini Vision Fallback...");
-      recordGeminiCall();
-      finalReport = await withRetry(() => analyzeScreenWithGemini(base64Jpeg), 1, 1500);
-      source = "vision";
-    } catch (e) {
-      console.error("[screenAnalyzer] Vision analysis failed after retries", e);
-    }
-  }
-
-  // 8. Professional Fallback (Local Intelligence)
-  if (!finalReport) {
-    console.info("[screenAnalyzer] All AI attempts failed. Generating professional fallback...");
-    const ctx = detectContentContext(extractedText || "No readable content found.");
-    finalReport = generateProfessionalFallback(ctx);
-    // source remains the extraction source
-  }
-
-  // Cache and Return
-  if (imageHash && finalReport) {
+  const result = { report, foundText: Boolean(text), hasInsights: Boolean(insights) };
+  if (imageHash) {
     setLastImageHash(imageHash);
-    setCachedReport(imageHash, finalReport);
+    setCachedReport(imageHash, result);
   }
-
-  return { report: finalReport, source };
+  return result;
 }

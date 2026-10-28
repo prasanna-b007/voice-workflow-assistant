@@ -17,8 +17,7 @@
  *   - document              → headings, body text
  *   - unknown               → generic fallback
  *
- * Returns a structured ContentContext object that the AI report generator
- * uses to build a targeted, context-aware prompt — minimising token waste.
+ * Returns a structured ContentContext object that the screen report is built from.
  */
 
 // ─── Category detection rules ─────────────────────────────────────────────────
@@ -233,7 +232,7 @@ export function detectContentContext(cleanText) {
 }
 
 /**
- * Format a ContentContext into a compact string for a Gemini prompt.
+ * Format a ContentContext into a compact string for an AI prompt.
  *
  * @param {ContentContext} ctx
  * @param {number} [maxChars=3000]

@@ -1,17 +1,12 @@
 /**
  * cacheManager.js
  * ───────────────
- * Provides three complementary token-saving mechanisms:
+ * Lets "analyze my screen" said twice in a row reuse the first report instead
+ * of running OCR (and any AI insights) again:
  *
  *  1. Result Cache  – stores the last N (hash → report) pairs with a TTL.
- *                     Identical screen content reuses the cached report.
- *
- *  2. Cooldown Guard – prevents hammering Gemini within a minimum interval
- *                      regardless of content change.
- *
- *  3. Image Hashing  – lightweight 64-bit perceptual hash so we can detect
- *                      whether the screen actually changed without sending
- *                      the whole image anywhere.
+ *  2. Image Hashing – lightweight 64-bit perceptual hash, to tell whether the
+ *                     screen actually changed.
  */
 
 // ─── Configuration ────────────────────────────────────────────────────────────
@@ -19,18 +14,14 @@
 /** Maximum age of a cached report (ms). Default: 2 minutes. */
 const CACHE_TTL_MS = 2 * 60 * 1000;
 
-/** Minimum time between ANY Gemini Vision/Text calls (ms). Default: 20 s. */
-const COOLDOWN_MS = 20_000;
-
 /** Maximum number of entries kept in the in-memory LRU cache. */
 const MAX_CACHE_SIZE = 10;
 
 // ─── Internal State ───────────────────────────────────────────────────────────
 
-/** @type {Map<string, { report: string, ts: number }>} */
+/** @type {Map<string, { report: object, ts: number }>} */
 const _cache = new Map();
 
-let _lastCallTs = 0;      // timestamp of the last Gemini call
 let _lastImageHash = "";  // perceptual hash of the last captured image
 
 // ─── Public API ───────────────────────────────────────────────────────────────
@@ -42,7 +33,7 @@ let _lastImageHash = "";  // perceptual hash of the last captured image
  * using the browser's Canvas API, then compare each pixel to the row average
  * to produce a 64-bit binary hash string.
  *
- * This runs entirely in the JS engine — no network, no Gemini.
+ * This runs entirely in the JS engine, with no network.
  *
  * @param {string} base64Jpeg  Raw base64 JPEG string (no data: prefix)
  * @returns {Promise<string>}  64-character binary hash string
@@ -113,7 +104,7 @@ export function setLastImageHash(hash) {
  * Returns null if not found or expired.
  *
  * @param {string} key
- * @returns {string|null}
+ * @returns {object|null}
  */
 export function getCachedReport(key) {
   const entry = _cache.get(key);
@@ -132,7 +123,7 @@ export function getCachedReport(key) {
  * Store a generated report keyed by content hash.
  *
  * @param {string} key
- * @param {string} report
+ * @param {object} report
  */
 export function setCachedReport(key, report) {
   // Evict oldest entry if at capacity
@@ -143,27 +134,8 @@ export function setCachedReport(key, report) {
   _cache.set(key, { report, ts: Date.now() });
 }
 
-/**
- * Returns true if Gemini was called too recently (within COOLDOWN_MS).
- */
-export function isOnCooldown() {
-  return Date.now() - _lastCallTs < COOLDOWN_MS;
-}
-
-/** Record that a Gemini call was just made. */
-export function recordGeminiCall() {
-  _lastCallTs = Date.now();
-}
-
-/** Remaining cooldown in seconds (0 if not on cooldown). */
-export function cooldownRemainingSeconds() {
-  const remaining = COOLDOWN_MS - (Date.now() - _lastCallTs);
-  return remaining > 0 ? Math.ceil(remaining / 1000) : 0;
-}
-
 /** Clear everything — useful in tests or on explicit user reset. */
 export function clearCache() {
   _cache.clear();
-  _lastCallTs = 0;
   _lastImageHash = "";
 }

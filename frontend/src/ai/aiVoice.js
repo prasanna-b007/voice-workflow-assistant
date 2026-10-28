@@ -1,90 +1,81 @@
-import { callGemini, geminiAvailable } from "./geminiConfig";
-const LOCAL_REPLIES = {
-  "open_app": (data) => `Opening ${data.app || "application"} for you.`,
-  "generate_dashboard_report": "Generating dashboard report.",
-  "toggle_wifi_off": "Disconnecting network access.",
-  "toggle_wifi_on": "Connection restored.",
-  "take_screenshot": "Screenshot captured.",
-  "toggle_screenshot": "Screenshot captured.",
-  "start_screen_recording": "Recording has begun.",
-  "stop_screen_recording": "Recording stopped.",
-  "error": "Something went wrong."
+// Spoken confirmations. Fixed sentences: instant, offline, and the same every
+// time, which is what you want from a short "Opening Chrome." anyway.
+
+const TOGGLE_NAMES = {
+  toggle_wifi: "Wi-Fi",
+  toggle_bluetooth: "Bluetooth",
+  toggle_airplane_mode: "Airplane mode",
+  toggle_hotspot: "Mobile hotspot",
+  toggle_night_light: "Night light",
+  toggle_energy_saver: "Energy saver",
+  toggle_battery_saver: "Energy saver",
 };
 
-export async function generateVoiceReply(action, data = {}) {
-  // Quick local check
-  const statePart = data.state ? `_${data.state}` : "";
-  const key = action === "toggle_wifi" ? `toggle_wifi${statePart}` : action;
-  
-  if (LOCAL_REPLIES[key]) {
-    return typeof LOCAL_REPLIES[key] === "function" ? LOCAL_REPLIES[key](data) : LOCAL_REPLIES[key];
+const titleCase = (s) => String(s || "").replace(/\b\w/g, (c) => c.toUpperCase());
+
+function levelReply(what, level) {
+  const l = String(level || "").toLowerCase();
+  if (l === "mute" || l === "unmute") return "Toggling mute.";
+  if (l === "increase" || l === "up") return `Turning the ${what} up.`;
+  if (l === "decrease" || l === "down") return `Turning the ${what} down.`;
+  return l ? `Setting the ${what} to ${l} percent.` : `Adjusting the ${what}.`;
+}
+
+/**
+ * The sentence Sonix says after an action.
+ * @param {string} action
+ * @param {object} [data]
+ * @returns {string} "" for actions that need no confirmation.
+ */
+export function generateVoiceReply(action, data = {}) {
+  if (TOGGLE_NAMES[action]) {
+    const name = TOGGLE_NAMES[action];
+    if (data.state === "on") return `Turning ${name} on.`;
+    if (data.state === "off") return `Turning ${name} off.`;
+    return `Toggling ${name}.`;
   }
 
-  if (!(await geminiAvailable())) {
-    console.error("Gemini API Key not found for voice reply generation.");
-    return `Performing ${action.replace(/_/g, ' ')}`;
-  }
-
-  const prompt = `You are "Sonix", a highly intelligent and sophisticated female AI assistant.
-Your job is to generate a short, stylish, and professional voice reply.
-
-IMPORTANT:
-- Return ONLY plain text
-- Keep it short (max 10 words)
-- No emojis
-- Sound confident, helpful, and slightly futuristic
-
-========================
-STYLE
-========================
-- Smart
-- Calm
-- Slightly futuristic
-- Confident
-
-========================
-EXAMPLES
-========================
-Action: open_app chrome
-Reply: Opening Chrome for you.
-
-Action: toggle_wifi off
-Reply: Disconnecting network access.
-
-Action: toggle_wifi on
-Reply: Connection restored.
-
-Action: take_screenshot
-Reply: Screenshot captured.
-
-Action: start_screen_recording
-Reply: Recording has begun.
-
-Action: stop_screen_recording
-Reply: Recording stopped.
-
-Action: error
-Reply: Something went wrong.
-
-========================
-INPUT
-========================
-Action: ${action}
-Data: ${JSON.stringify(data)}
-`;
-
-  try {
-    const result = await callGemini({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: {
-        temperature: 0.7,
-        maxOutputTokens: 50,
-      }
-    });
-    const reply = result.candidates?.[0]?.content?.parts?.[0]?.text || `Ok, ${action.replace(/_/g, ' ')}`;
-    return reply.trim();
-  } catch (error) {
-    console.error("Failed to generate voice reply:", error);
-    return `Action ${action} initiated.`;
+  switch (action) {
+    case "open_app":
+    case "switch_app":
+      return `Opening ${titleCase(data.app) || "the app"}.`;
+    case "close_app":
+      return data.app && data.app !== "window" ? `Closing ${titleCase(data.app)}.` : "Closing the window.";
+    case "set_volume":
+      return levelReply("volume", data.level);
+    case "set_brightness":
+      return levelReply("brightness", data.level);
+    case "take_screenshot":
+    case "toggle_screenshot":
+      return "Taking a screenshot.";
+    case "start_screen_recording":
+      return "Starting screen recording.";
+    case "stop_screen_recording":
+      return "Stopping screen recording.";
+    case "youtube_search":
+      return data.query ? `Searching YouTube for ${data.query}.` : "Opening YouTube.";
+    case "schedule_meeting":
+      return "Opening your calendar.";
+    case "create_task":
+      return data.task ? `Reminder set: ${data.task}.` : "Reminder set.";
+    case "send_email":
+      return "Opening your email.";
+    case "open_url":
+      return "Opening the website.";
+    case "shutdown":
+      return "Shutting down in 30 seconds. Say cancel shutdown to stop it.";
+    case "restart":
+      return "Restarting in 30 seconds. Say cancel shutdown to stop it.";
+    case "cancel_shutdown":
+      return "Shutdown cancelled.";
+    case "shutdown_timer":
+      return `Shutting down in ${data.time} minutes.`;
+    case "scroll_up":
+    case "scroll_down":
+      return "";
+    case "error":
+      return "Something went wrong.";
+    default:
+      return "Done.";
   }
 }

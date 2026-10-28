@@ -5,68 +5,15 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { generateVoiceReply } from "../ai/aiVoice";
 import { speakText } from "../voice/voiceUtils";
-import { generateDashboardReport } from "../ai/aiReportGenerator";
 import { analyzeCurrentScreen } from "../ai/screenAnalyzer";
 import { openReportInNotepad } from "../ai/notepadAutomation";
+import { answerWithWebSearch } from "../ai/webAnswer";
 import { evaluateExpression } from "../utils/safeMath";
-
-/* ────────────────────────────────────────────
-   Shared App Name → Process Name Map
-   Used by BOTH open_app and close_app for consistency.
-   ──────────────────────────────────────────── */
-const APP_PROCESS_MAP = {
-  // Code Editors
-  "visual studio code": "code",
-  "vs code": "code",
-  "vscode": "code",
-  "visual studio": "devenv",
-  // Microsoft Office
-  "word": "winword",
-  "microsoft word": "winword",
-  "excel": "excel",
-  "powerpoint": "powerpnt",
-  // System Tools
-  "notepad": "notepad",
-  "note pad": "notepad",
-  "note pade": "notepad",
-  "paint": "mspaint",
-  "command prompt": "cmd",
-  "terminal": "wt",
-  "calculator": "calc",
-  "calc": "calc",
-  "file explorer": "explorer",
-  "explorer": "explorer",
-  "task manager": "taskmgr",
-  "snipping tool": "snippingtool",
-  "control panel": "control",
-  "recycle bin": "shell:RecycleBinFolder",
-  "settings": "ms-settings:",
-  "camera": "microsoft.windows.camera:",
-  "clock": "ms-clock:",
-  "maps": "bingmaps:",
-  "store": "ms-windows-store:",
-  "microsoft store": "ms-windows-store:",
-  // Browsers
-  "chrome": "chrome",
-  "google chrome": "chrome",
-  "firefox": "firefox",
-  "edge": "msedge",
-  "microsoft edge": "msedge",
-  "brave": "brave",
-  // Communication & Media
-  "spotify": "spotify",
-  "discord": "discord",
-  "slack": "slack",
-  "teams": "teams",
-  "microsoft teams": "teams",
-  "zoom": "zoom",
-  "vlc": "vlc",
-  "media player": "wmplayer",
-  "obs": "obs64",
-  "steam": "steam",
-};
-
-const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+import { APP_PROCESS_MAP, WEB_APPS, matchAppName } from "./apps";
+import { runAssistantAction } from "./assistantActions";
+import { askAI } from "../ai/aiClient";
+import { findContact } from "../storage/contacts";
+import { rememberSearch } from "./lastSearch";
 
 export async function executeWorkflow(command) {
   if (!command) return;
@@ -78,6 +25,9 @@ export async function executeWorkflow(command) {
     }
     return;
   }
+
+  // Media, timers, maps, window control, playback, WhatsApp, routines, selection, news, translate.
+  if (await runAssistantAction(command)) return;
 
   const action = command.action?.toLowerCase();
   const data = command.data || {};
@@ -109,89 +59,35 @@ export async function executeWorkflow(command) {
   // Natural language confirmation helper
   const confirmAction = async (act, d = {}, aiReply = null) => {
     try {
-      const reply = aiReply || await generateVoiceReply(act, d);
-      await executeWorkflow({ action: "speak_text", data: { text: reply } });
+      const reply = aiReply || generateVoiceReply(act, d);
+      if (reply) await executeWorkflow({ action: "speak_text", data: { text: reply } });
     } catch (e) { console.error("Natural reply failed", e); }
   };
 
-  // ── Screen Report (Professional AI Pipeline) ────────────────────────────────
+  // ── Screen Report ──────────────────────────────────────────────────────────
+  // Windows OCR and a built-in report; AI insights are added automatically when AI is available.
   if (action === "analyze_screen_report") {
     const autoSave = command.autoSave || data.autoSave || command.save || data.save || false;
 
-    // Acknowledge
-    await executeWorkflow({ action: "speak_text", data: { text: "Analyzing current screen." } });
+    await executeWorkflow({ action: "speak_text", data: { text: "Reading your screen." } });
 
     try {
-      const { report: reportText, source } = await analyzeCurrentScreen();
+      const { report, foundText, hasInsights } = await analyzeCurrentScreen();
 
-      if (!reportText) throw new Error("Report generation failed.");
+      if (!foundText && !hasInsights) {
+        await executeWorkflow({ action: "speak_text", data: { text: "I couldn't find any text on the screen." } });
+        return;
+      }
 
-      // Context-aware voice status
-      const statusMsg = source === "cache"
-        ? "Retrieving latest analysis."
-        : source === "vision" || source === "dom" || source === "ocr"
-        ? "Generating detailed report."
-        : "Producing summary report.";
-      
-      await executeWorkflow({ action: "speak_text", data: { text: statusMsg } });
-
-      console.info(`[workflowExecutor] Screen report source: ${source}`);
-
-      // Paste to Notepad
-      await openReportInNotepad(reportText, autoSave);
-
-      // Final confirmation
-      const finalMsg = source === "none" 
-        ? "Screen analysis completed with summary." 
-        : "Screen report generated successfully.";
-      
+      await openReportInNotepad(report, autoSave);
+      const finalMsg = hasInsights ? "Screen report ready, with AI insights." : "Screen report ready.";
       await executeWorkflow({ action: "speak_text", data: { text: finalMsg } });
     } catch (e) {
       console.error("Screen report generation failed:", e);
       await executeWorkflow({
         action: "speak_text",
-        data: { text: "I'm sorry, I'm unable to analyze the screen right now. Please try again in a moment." },
+        data: { text: "I'm sorry, I couldn't read the screen right now. Please try again in a moment." },
       });
-    }
-    return;
-  }
-
-
-  // 1.5 Dashboard Reporting
-  if (action === "generate_dashboard_report") {
-    confirmAction(action, {}, aiReply || "Generating dashboard report.");
-    
-    try {
-      // Hide Sonix overlay so we can interact with the dashboard underneath
-      const win = getCurrentWindow();
-      await win.hide();
-
-      // Emulate Ctrl+A (Select All) and Ctrl+C (Copy) to grab the dashboard's text
-      await invoke("system_control_raw", { 
-        script: "$wshell = New-Object -ComObject WScript.Shell; Start-Sleep -m 350; $wshell.SendKeys('^a'); Start-Sleep -m 300; $wshell.SendKeys('^c'); Start-Sleep -m 100; $wshell.SendKeys('{ESC}');" 
-      });
-
-      // Give the system clipboard time to populate
-      await wait(800);
-
-      // Extract data securely from the clipboard
-      const clipboardText = await invoke("get_clipboard_text");
-
-      // Generate the report using Gemini with the raw clipboard text
-      const reportText = await generateDashboardReport({ rawTextPreview: clipboardText });
-
-      if (command.autoSave || data.autoSave || command.save || data.save) {
-        await invoke("save_dashboard_report", { report: reportText });
-      }
-
-      await executeWorkflow({ action: "open_app", data: { app: "notepad" } });
-      await wait(900);
-      await executeWorkflow({ action: "type_text", data: { text: reportText, app: "notepad" } });
-      await wait(300);
-      await executeWorkflow({ action: "speak_text", data: { text: "Dashboard report generated successfully." } });
-    } catch (e) {
-      console.error("Dashboard report generation failed:", e);
-      await executeWorkflow({ action: "speak_text", data: { text: "Failed to generate dashboard report." } });
     }
     return;
   }
@@ -211,7 +107,7 @@ export async function executeWorkflow(command) {
       await win.hide();
       setTimeout(async () => {
         if (app === "current" || !app) {
-           await invoke("system_control_raw", { script: "$wshell = New-Object -ComObject WScript.Shell; $wshell.SendKeys('^s');" });
+           await invoke("press_keys", { keys: "save" });
         } else {
            await invoke("save_in_app", { appName: app });
         }
@@ -233,46 +129,16 @@ export async function executeWorkflow(command) {
 
     console.log(`Opening app: ${targetApp}...`);
 
-    // ---------- WEB APPS (open in browser) ----------
-    const webApps = {
-      "youtube": "https://www.youtube.com",
-      "google": "https://www.google.com",
-      "whatsapp": "https://web.whatsapp.com",
-      "facebook": "https://www.facebook.com",
-      "instagram": "https://www.instagram.com",
-      "twitter": "https://www.twitter.com",
-      "x": "https://www.x.com",
-      "linkedin": "https://www.linkedin.com",
-      "github": "https://www.github.com",
-      "gmail": "https://mail.google.com",
-      "email": "https://mail.google.com",
-      "outlook": "https://outlook.live.com",
-      "google drive": "https://drive.google.com",
-      "google maps": "https://maps.google.com",
-      "google calendar": "https://calendar.google.com",
-      "netflix": "https://www.netflix.com",
-      "amazon": "https://www.amazon.com",
-      "reddit": "https://www.reddit.com",
-      "spotify": "https://open.spotify.com",
-      "chatgpt": "https://chat.openai.com",
-      "canva": "https://www.canva.com",
-      "figma": "https://www.figma.com",
-      "notion": "https://www.notion.so",
-      "slack": "https://slack.com",
-      "discord": "https://discord.com/app",
-      "telegram": "https://web.telegram.org",
-      "pinterest": "https://www.pinterest.com",
-      "stackoverflow": "https://stackoverflow.com",
-      "stack overflow": "https://stackoverflow.com"
-    };
+    targetApp = matchAppName(targetApp) || targetApp;
 
-    if (webApps[targetApp]) {
+    // ---------- WEB APPS (open in browser) ----------
+    if (WEB_APPS[targetApp]) {
       try {
         confirmAction(action, { app: targetApp });
-        await openUrl(webApps[targetApp]);
+        await openUrl(WEB_APPS[targetApp]);
       } catch (e) {
         console.warn("openUrl failed, falling back to shell open:", e);
-        await open(webApps[targetApp]);
+        await open(WEB_APPS[targetApp]);
       }
       return;
     }
@@ -292,7 +158,8 @@ export async function executeWorkflow(command) {
 
   if (action === "close_app") {
     // Use the same shared map as open_app for consistency
-    const resolvedApp = APP_PROCESS_MAP[app] || app;
+    const known = matchAppName(app);
+    const resolvedApp = (known && APP_PROCESS_MAP[known]) || app;
 
     try {
       if (resolvedApp === "current" || !resolvedApp) {
@@ -307,7 +174,9 @@ export async function executeWorkflow(command) {
          await invoke("close_app", { appName: resolvedApp });
       }
     } catch (e) {
+      // "Spotify isn't running.", "I won't close explorer: Windows or Sonix needs it."
       console.error(`Failed to close app:`, e);
+      speakText(String(e));
     }
     return;
   }
@@ -315,7 +184,14 @@ export async function executeWorkflow(command) {
   // 4. Calendar & Tasks
   const buildCalendarUrl = (title, d, t) => {
     let url = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(title || "Meeting")}`;
-    if (d && t && d.includes("-") && t.includes(":")) {
+    if (d && !t && d.includes("-")) {
+      // A date with no time: an all-day event, which Google Calendar ends on the next day.
+      const start = new Date(`${d}T00:00:00`);
+      const end = new Date(start);
+      end.setDate(end.getDate() + 1);
+      const ymd = (x) => `${x.getFullYear()}${String(x.getMonth() + 1).padStart(2, "0")}${String(x.getDate()).padStart(2, "0")}`;
+      url += `&dates=${ymd(start)}/${ymd(end)}`;
+    } else if (d && t && d.includes("-") && t.includes(":")) {
       const cleanDate = d.replace(/-/g, ""); 
       const cleanTime = t.replace(/:/g, "") + "00"; 
       
@@ -331,6 +207,7 @@ export async function executeWorkflow(command) {
   };
 
   if (action === "schedule_meeting") {
+    confirmAction(action, { title: meetingTitle }, aiReply);
     const calUrl = buildCalendarUrl(meetingTitle, dateStr, timeStr);
     try { await openUrl(calUrl); } catch { await open(calUrl); }
     return;
@@ -338,7 +215,8 @@ export async function executeWorkflow(command) {
 
   if (action === "create_task" || action === "create_reminder") {
     saveTask({ task, date: dateStr, time: timeStr, priority: "normal" });
-    const calUrl = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(task || "New Task")}`;
+    confirmAction(action, { task }, aiReply);
+    const calUrl = buildCalendarUrl(task || "New Task", dateStr, timeStr);
     try { await openUrl(calUrl); } catch { await open(calUrl); }
     return;
   }
@@ -346,32 +224,35 @@ export async function executeWorkflow(command) {
   // 5. System Controls (Volume, Brightness, Toggles)
   if (action === "set_volume") {
     const levelStr = String(level || "").toLowerCase();
-    let volScript = "";
-    
-    if (levelStr === "increase" || levelStr === "up") {
-      volScript = "$obj = New-Object -ComObject WScript.Shell; for($i=0; $i -lt 5; $i++) { $obj.SendKeys([char]175) }";
-    } else if (levelStr === "decrease" || levelStr === "down") {
-      volScript = "$obj = New-Object -ComObject WScript.Shell; for($i=0; $i -lt 5; $i++) { $obj.SendKeys([char]174) }";
-    } else {
-      const levelNum = parseInt(level) || 50;
-      const loops = Math.floor(levelNum / 2);
-      volScript = `$obj = New-Object -ComObject WScript.Shell; for($i=0; $i -lt 50; $i++) { $obj.SendKeys([char]173) }; for($i=0; $i -lt ${loops}; $i++) { $obj.SendKeys([char]175) }`;
-    }
-
     confirmAction(action, { level }, aiReply);
-    await invoke("system_control_raw", { script: volScript });
+    if (levelStr === "mute" || levelStr === "unmute") {
+      // The mute key toggles, so this also unmutes.
+      await invoke("press_keys", { keys: "volume_mute" });
+    } else if (levelStr === "increase" || levelStr === "up") {
+      await invoke("press_keys", { keys: "volume_up" });
+    } else if (levelStr === "decrease" || levelStr === "down") {
+      await invoke("press_keys", { keys: "volume_down" });
+    } else {
+      const parsed = parseInt(level, 10);
+      await invoke("set_volume", { level: Number.isNaN(parsed) ? 50 : Math.max(0, Math.min(100, parsed)) });
+    }
     return;
   }
 
   if (action === "set_brightness") {
     const levelStr = String(level || "").toLowerCase();
     confirmAction(action, { level }, aiReply);
-    const br = (levelStr === "increase" || levelStr === "up") ? 80 : (levelStr === "decrease" || levelStr === "down") ? 20 : (parseInt(level) || 50);
-    await invoke("system_control_raw", { script: `(Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightnessMethods).WmiSetBrightness(1, ${br})` });
+    const parsed = parseInt(level, 10);
+    const br = (levelStr === "increase" || levelStr === "up") ? 80 : (levelStr === "decrease" || levelStr === "down") ? 20 : (Number.isNaN(parsed) ? 50 : Math.max(0, Math.min(100, parsed)));
+    try {
+      await invoke("set_brightness", { level: br });
+    } catch (e) {
+      speakText(String(e));
+    }
     return;
   }
 
-  const systemActions = ["toggle_wifi", "toggle_bluetooth", "toggle_airplane_mode", "toggle_hotspot", "toggle_night_light", "toggle_energy_saver", "toggle_battery_saver", "toggle_screenshot", "take_screenshot", "toggle_screen_recording", "start_screen_recording", "stop_screen_recording"];
+  const systemActions = ["toggle_wifi", "toggle_bluetooth", "toggle_airplane_mode", "toggle_hotspot", "toggle_night_light", "toggle_energy_saver", "toggle_battery_saver", "toggle_screenshot", "take_screenshot", "toggle_screen_recording", "start_screen_recording", "stop_screen_recording", "scroll_up", "scroll_down"];
   if (systemActions.includes(action)) {
     try {
       let finalAction = action;
@@ -401,27 +282,38 @@ export async function executeWorkflow(command) {
       console.warn("Could not hide assistant window before opening email.");
     }
 
-    const targetRecipient = to || data.to || "";
-    const subjectLine = subject || "Message from Sonix";
-    const bodyText = message || data.message || "";
-    
-    // Construct valid mailto URI
-    const mailto = `mailto:${targetRecipient}?subject=${encodeURIComponent(subjectLine)}&body=${encodeURIComponent(bodyText)}`;
-    
-    console.log("Opening email:", mailto);
-    
-    try {
-      // Step 1: Try the specialized opener plugin
-      await openUrl(mailto);
-    } catch {
+    // "email my manager" → the address saved for that contact.
+    const spokenTo = to || data.to || "";
+    const targetRecipient = spokenTo.includes("@") ? spokenTo : findContact(spokenTo)?.email || "";
+    let subjectLine = subject || "";
+    let bodyText = message || data.message || "";
+
+    // "saying I'm on leave tomorrow" becomes a short, polite email; the plain words are kept if AI is off.
+    if (bodyText) {
+      const raw = await askAI({
+        prompt: `Write a short, polite email${spokenTo ? ` to ${spokenTo}` : ""} that says: "${bodyText}".${subjectLine ? ` Subject: "${subjectLine}".` : ""}
+Reply as JSON: {"subject": "...", "body": "..."}. Keep the body under 80 words, end with "Regards," and no name or placeholders.`,
+        json: true,
+        maxTokens: 400,
+      });
       try {
-        // Step 2: Try the native Windows "start" command via our Rust backend
-        await invoke("open_app", { appName: mailto });
+        const draft = raw && JSON.parse(raw.replace(/```json|```/gi, "").trim());
+        if (draft?.body) {
+          bodyText = draft.body;
+          subjectLine = subjectLine || draft.subject || "";
+        }
       } catch {
-        // Step 3: Last resort shell open
-        await open(mailto);
+        console.warn("Email draft wasn't JSON; using the spoken words.");
       }
     }
+
+    const compose =
+      `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(targetRecipient)}` +
+      `&su=${encodeURIComponent(subjectLine)}&body=${encodeURIComponent(bodyText)}`;
+
+    console.log("Opening Gmail compose:", compose);
+    confirmAction(action, { to: targetRecipient }, aiReply);
+    try { await openUrl(compose); } catch { await open(compose); }
     
     if (action === "email_and_schedule") {
       setTimeout(async () => {
@@ -432,7 +324,7 @@ export async function executeWorkflow(command) {
     return;
   }
 
-  // 6b. Parser / Gemini actions (kept in sync with aiParser prompt)
+  // 6b. Other parser actions (kept in sync with SUPPORTED_ACTIONS in aiParser.js)
   if (action === "generic_reply") {
     const r = command.reply || data.reply || "";
     if (r) await executeWorkflow({ action: "speak_text", data: { text: r } });
@@ -447,6 +339,20 @@ export async function executeWorkflow(command) {
     return;
   }
 
+  if (action === "web_search") {
+    const q = (data.query || command.query || task || "").trim();
+    const url = q ? `https://www.google.com/search?q=${encodeURIComponent(q)}` : "https://www.google.com";
+    if (q) await executeWorkflow({ action: "speak_text", data: { text: `Searching Google for ${q}.` } });
+    try { await openUrl(url); } catch { await open(url); }
+    if (!q) return;
+    rememberSearch(q);
+
+    // The results page is already open for the user to read; the spoken answer is a bonus.
+    const answer = await answerWithWebSearch(q);
+    await executeWorkflow({ action: "speak_text", data: { text: answer || "Here are the results." } });
+    return;
+  }
+
   if (action === "search_file") {
     const query = data.query || task || "";
     const uri = `search-ms:query=${encodeURIComponent(query)}`;
@@ -455,18 +361,14 @@ export async function executeWorkflow(command) {
   }
 
   if (action === "open_file") {
-    const raw = (data.name || data.file || task || "").trim();
-    const safe = raw.replace(/[^a-zA-Z0-9._\- ]/g, "");
-    if (!safe) return;
-    const esc = safe.replace(/'/g, "''");
-    const script =
-      `$n = '${esc}'; ` +
-      `$dirs = @("$env:USERPROFILE\\Desktop", "$env:USERPROFILE\\Documents", "$env:USERPROFILE\\Downloads"); ` +
-      `foreach ($d in $dirs) { if (Test-Path $d) { $f = Get-ChildItem -Path $d -File -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.Name -like ('*' + $n + '*') } | Select-Object -First 1; if ($null -ne $f) { Invoke-Item -LiteralPath $f.FullName; break } } }`;
+    const name = (data.name || data.file || task || "").trim();
+    if (!name) return;
     try {
-      await invoke("system_control_raw", { script });
+      // Searches Desktop, Documents and Downloads, and opens the first match.
+      await invoke("open_file", { name });
     } catch (e) {
       console.error("open_file failed:", e);
+      speakText(String(e));
     }
     return;
   }
@@ -486,10 +388,22 @@ export async function executeWorkflow(command) {
     return;
   }
 
+  if (action === "restart") {
+    confirmAction(action, data, aiReply);
+    await invoke("system_control", { action: "restart", state: "" });
+    return;
+  }
+
+  if (action === "cancel_shutdown") {
+    confirmAction(action, data, aiReply);
+    await invoke("system_control", { action: "cancel_shutdown", state: "" });
+    return;
+  }
+
   if (action === "shutdown_timer") {
     const mins = Math.max(1, parseInt(data.time, 10) || 10);
     confirmAction(action, { ...data, time: mins }, aiReply);
-    await invoke("system_control_raw", { script: `shutdown.exe /s /t ${mins * 60}` });
+    await invoke("system_control", { action: "shutdown_timer", state: "", minutes: mins });
     return;
   }
 
@@ -516,7 +430,7 @@ export async function executeWorkflow(command) {
 
   if (action === "open_recent") {
     try {
-      await invoke("system_control_raw", { script: "explorer.exe shell:Recent" });
+      await invoke("open_uri", { uri: "shell:Recent" });
     } catch (e) {
       console.error("open_recent failed:", e);
     }
@@ -562,7 +476,11 @@ export async function executeWorkflow(command) {
     }
     return;
   }
-  if (action === "open_url") { try { await openUrl(data.url || task); } catch { await open(data.url || task); } return; }
+  if (action === "open_url") {
+    confirmAction(action, { url: data.url || task }, aiReply);
+    try { await openUrl(data.url || task); } catch { await open(data.url || task); }
+    return;
+  }
 
   console.log("No workflow matched for action:", action);
 }

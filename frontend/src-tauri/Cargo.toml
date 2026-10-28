@@ -6,7 +6,8 @@ authors = ["prasanna-b007"]
 license = ""
 repository = "https://github.com/prasanna-b007/voice-workflow-assistant"
 edition = "2021"
-rust-version = "1.77.2"
+# whisper-rs-sys needs 1.88.
+rust-version = "1.88"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -22,11 +23,27 @@ tauri-plugin-log = "2"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-shell = "2"
 tauri-plugin-opener = "2"   
-windows = { version = "0.61.3", features = ["Devices_Radios", "Foundation", "Foundation_Collections", "Networking_Connectivity", "Networking_NetworkOperators"] }
+windows = { version = "0.61.3", features = ["Devices_Radios", "Foundation", "Foundation_Collections", "Networking_Connectivity", "Networking_NetworkOperators", "Media_SpeechRecognition", "Media_Ocr", "Globalization", "Graphics_Imaging", "Storage_Streams", "Win32_System_WinRT", "Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_SystemInformation", "Win32_Storage_FileSystem", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_System_Shutdown", "Win32_System_LibraryLoader"] }
+# Async/collection types used by the speech module; same versions the windows crate already pulls in.
+windows-future = "0.2"
+windows-collections = "0.2"
 screenshots = "0.8"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 base64 = "0.22"
-# Gemini requests are proxied through Rust so the API key never enters the JS bundle.
+# Model downloads (download.rs) and requests to the local AI engine (ai.rs).
 # Version matches the reqwest tauri already pulls in, so no second copy is built.
 # tauri enables it without a TLS backend, hence native-tls (schannel on Windows).
 reqwest = { version = "0.13", default-features = false, features = ["json", "native-tls"] }
+# Local speech-to-text (src/whisper.rs). Builds whisper.cpp from source, which needs CMake,
+# and generates its bindings with bindgen, which needs LLVM (the bindings bundled with the
+# crate were generated on Linux and don't compile on Windows).
+# Runs on the GPU through Vulkan, which needs the Vulkan SDK (VULKAN_SDK set) to build and
+# vulkan-1.dll, installed by every GPU driver, to run. Without a GPU, Whisper is unusable
+# here (minutes per command on an 8-core Ryzen), so whisper.rs then stays on Windows'
+# recognizer instead.
+whisper-rs = { version = "0.16", features = ["log_backend", "vulkan"] }
+# Microphone capture and voice-activity detection for Whisper (src/mic.rs).
+cpal = "0.17"
+earshot = "1.2"
+# Verifies the downloaded Whisper model; same version tauri already pulls in.
+sha2 = "0.10"

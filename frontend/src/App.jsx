@@ -3,41 +3,88 @@ import { startRecognition, stopRecognition } from "./voice/speechRecognition";
 import { initWakeWordListener, startWakeWordListener, stopWakeWordListener } from "./voice/wakeWordListener";
 import { speakText } from "./voice/voiceUtils";
 import { playWakeChime } from "./voice/audioEffects";
-import { detectIntentWithGemini } from "./ai/aiParser";
-import { detectContinue } from "./ai/aiContinue";
+import { parseCommand } from "./ai/aiParser";
 import { executeWorkflow } from "./workflows/workflowExecutor";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import "./App.css";
+
+// Actions that start music or video. Conversation mode stops after them: the mic would
+// hear the playback and Whisper would turn lyrics into commands.
+const PLAYS_AUDIO = new Set(["youtube_play", "spotify_play", "media_control"]);
 
 function App() {
   const [text, setText] = useState("");
   const [status, setStatus] = useState("idle"); // idle | listening | processing | executed
   const executionLocked = useRef(false);
-  const [mode, setMode] = useState("workflow"); // workflow | dictation
-  const modeRef = useRef("workflow");
-  const textRef = useRef("");
   const statusRef = useRef("idle");
+  const orbRef = useRef(null);
+  // Bumped whenever a conversation starts or ends. Work that awaited something checks
+  // it hasn't changed before carrying on, so Esc or a new hotkey press really stops the
+  // old conversation instead of letting it reopen the mic later.
+  const sessionRef = useRef(0);
+  const timersRef = useRef([]);
 
   useEffect(() => {
     statusRef.current = status;
   }, [status]);
 
-
-  const startListeningAuto = (isDictation = false) => {
-    // Pause wake word listener while the assistant is active to avoid resource conflicts
-    stopWakeWordListener();
-    
-    setText("");
-    setStatus("listening");
-    executionLocked.current = false;
-    
-    startRecognition(handleResult, handleError, isDictation);
+  // setTimeout that escapeOverlay cancels.
+  const later = (fn, ms) => {
+    timersRef.current.push(setTimeout(fn, ms));
+  };
+  const clearTimers = () => {
+    timersRef.current.forEach(clearTimeout);
+    timersRef.current = [];
   };
 
-  const handleResult = async (transcript, isFinal, isSilentEnd = false) => {
+  // A new conversation (hotkey or wake word), replacing any still running.
+  const startSession = () => {
+    sessionRef.current++;
+    clearTimers();
+    stopRecognition();
+    startListeningAuto();
+  };
+
+  const startListeningAuto = () => {
+    // Pause wake word listener while the assistant is active to avoid resource conflicts
+    stopWakeWordListener();
+
+    setText("");
+    setStatus("listening");
+    setMicLevel(0);
+    executionLocked.current = false;
+
+    const session = sessionRef.current;
+    startRecognition(
+      (transcript, isFinal, isSilentEnd) => handleResult(transcript, isFinal, isSilentEnd, session),
+      handleError,
+      {
+        onLevel: setMicLevel,
+        onTranscribing: handleTranscribing,
+        // Back to listening after hearing only Sonix's own reply.
+        onListening: () => setStatus("listening"),
+      },
+    );
+  };
+
+  // Whisper reports the mic level ~15 times a second; set it on the orb directly
+  // rather than re-rendering.
+  const setMicLevel = (level) => {
+    orbRef.current?.style.setProperty("--level", level);
+  };
+
+  // Whisper shows no words while the user speaks; once they stop, show that it's working.
+  const handleTranscribing = () => {
+    setMicLevel(0);
+    if (!executionLocked.current) setStatus("processing");
+  };
+
+  const handleResult = async (transcript, isFinal, isSilentEnd, session) => {
+    // Still the conversation this result belongs to (no Esc, no new one since)?
+    const current = () => session === sessionRef.current;
+    if (!current()) return;
     if (transcript) {
       setText(transcript);
-      textRef.current = transcript;
     }
 
     if (isFinal && !isSilentEnd && !executionLocked.current) {
@@ -47,51 +94,55 @@ function App() {
       setStatus("processing");
 
       try {
-        if (modeRef.current === "dictation") {
-          console.log("Dictation mode: Typing transcript directly...");
-          await executeWorkflow({ action: "type_text", data: { text: transcript, app: "" } });
-        } else {
-          const intent = await detectIntentWithGemini(transcript);
-          const hasAction = (intent?.action && intent.action !== "unknown") || intent?.reply;
+        const intent = await parseCommand(transcript);
+        if (!current()) return;
+        const hasAction = (intent?.action && intent.action !== "unknown") || intent?.reply;
 
-          if (!hasAction) {
-            console.warn("No intent detected or unknown action.");
-            escapeOverlay();
-            return;
-          }
-
-          console.log("Intent:", intent);
-
-          let shouldContinue = false;
-          if (intent.continue === true) {
-            shouldContinue = true;
-          } else if (intent.continue === false) {
-            shouldContinue = false;
-          } else {
-            const c = await detectContinue(transcript);
-            shouldContinue = c.continue !== false;
-          }
-
-          await executeWorkflow(intent);
-
-          // Respect continuous mode from AI + aiContinue fallback (Conversation Mode)
-          if (shouldContinue) {
-            setStatus("listening");
-            setTimeout(() => {
-              executionLocked.current = false;
-              startListeningAuto(false);
-            }, 1500); 
-            return;
-          }
-
-          setStatus("executed");
-          setTimeout(() => {
-            escapeOverlay();
-          }, 3000); 
+        if (!hasAction) {
+          console.warn("No intent detected or unknown action.");
+          speakText("Sorry, I didn't catch that.");
+          escapeOverlay();
+          return;
         }
+
+        console.log("Intent:", intent);
+
+        // Keep listening for the next command unless the parser says this one ends
+        // the conversation ("stop listening", "bye", "thanks") or it starts playback.
+        let shouldContinue = intent.continue !== false && !PLAYS_AUDIO.has(intent.action);
+
+        await executeWorkflow(intent);
+        if (!current()) return;
+
+        // Actions that type, save or change a setting hide the overlay to reach the
+        // user's app. Don't keep listening behind a hidden window, where Esc can't reach.
+        if (shouldContinue) {
+          shouldContinue = await getCurrentWindow().isVisible().catch(() => false);
+          if (!current()) return;
+          if (!shouldContinue) {
+            escapeOverlay();
+            return;
+          }
+        }
+
+        // Conversation mode: listen for the next command.
+        if (shouldContinue) {
+          setStatus("listening");
+          later(() => {
+            if (!current()) return;
+            executionLocked.current = false;
+            startListeningAuto();
+          }, 1500);
+          return;
+        }
+
+        setStatus("executed");
+        later(() => {
+          escapeOverlay();
+        }, 3000);
       } catch (error) {
         console.error("Workflow execution failed:", error);
-        escapeOverlay();
+        if (current()) escapeOverlay();
       }
     } else if (isFinal && isSilentEnd && !executionLocked.current) {
       escapeOverlay();
@@ -103,11 +154,15 @@ function App() {
       executionLocked.current = true;
       setText(errorMsg);
       setStatus("executed");
-      setTimeout(() => escapeOverlay(), 1500);
+      // The privacy message tells the user which setting to change; give them time to read it.
+      later(() => escapeOverlay(), errorCode === "privacy" ? 7000 : 1500);
     }
   };
 
   const escapeOverlay = async () => {
+    // Ends the conversation: anything still awaiting sees the new session and stops.
+    sessionRef.current++;
+    clearTimers();
     stopRecognition();
     setStatus("idle");
     setText("");
@@ -124,35 +179,28 @@ function App() {
   // Mounted last so the handlers it closes over are already initialised.
   useEffect(() => {
     // Listen for custom trigger event from Rust
+    // listen() resolves asynchronously, so cleanup can run before we hold the
+    // unlisten handle (StrictMode does exactly that in dev). Without the flag a
+    // second listener survives, every key press starts recognition twice, and
+    // the second start aborts the first, which closes the overlay.
     let unlistenShortcut = null;
-    getCurrentWindow().listen("trigger-assistant", (event) => {
-      const newMode = event.payload || "workflow";
-      setMode(newMode);
-      modeRef.current = newMode;
-      
-      // startListeningAuto will handle initial setup
-      startListeningAuto(newMode === "dictation");
-    }).then(u => { unlistenShortcut = u; });
+    let disposed = false;
+    getCurrentWindow().listen("trigger-assistant", () => {
+      // Pressed again mid-command: start over rather than run two conversations.
+      startSession();
+    }).then(u => {
+      if (disposed) u();
+      else unlistenShortcut = u;
+    });
 
     // Initialize Wake Word Listener
-    initWakeWordListener((detectedMode = "workflow") => {
+    initWakeWordListener(() => {
       // On wake word heard
       if (statusRef.current === "idle") {
          playWakeChime(); // Play the premium ping sound
-         
-         setMode(detectedMode);
-         modeRef.current = detectedMode;
-         
-         const isDictation = detectedMode === "dictation";
-         startListeningAuto(isDictation);
-         
-         // Response varies by mode for a premium feel
-         if (isDictation) {
-           speakText("Ready to type.");
-         } else {
-           speakText("I'm here.");
-         }
-         
+         startSession();
+         speakText("I'm here.");
+
          getCurrentWindow().show().catch(() => {});
          getCurrentWindow().setFocus().catch(() => {});
       }
@@ -162,10 +210,6 @@ function App() {
     const handleKeyDown = async (e) => {
       if (e.key === "Escape") {
         await escapeOverlay();
-      } else if (e.key === "Enter" && modeRef.current === "dictation") {
-        if (textRef.current) {
-          handleResult(textRef.current, true);
-        }
       }
     };
     window.addEventListener("keydown", handleKeyDown);
@@ -177,6 +221,7 @@ function App() {
     }
 
     return () => {
+      disposed = true;
       window.removeEventListener("keydown", handleKeyDown);
       stopWakeWordListener();
       if (unlistenShortcut) unlistenShortcut();
@@ -197,13 +242,12 @@ function App() {
       </div>
       <div className="radial-blur"></div>
 
-      <div className={`interaction-zone ${mode}`}>
-        <div className="mode-label">{mode.toUpperCase()} MODE</div>
+      <div className="interaction-zone">
         <div className="live-transcript">
           {text}
         </div>
 
-        <div className={`mic-orb ${status}`}>
+        <div ref={orbRef} className={`mic-orb ${status}`}>
           <div className="waveform-ripple"></div>
           <div className="orb-core"></div>
           <svg

@@ -1,0 +1,8 @@
+[build]
+# Build outside the repository, in a short folder. whisper.cpp's Vulkan backend configures
+# and builds a helper tool in deeply nested folders under the build directory, and MSVC
+# can't create files there past Windows' 260-character path limit, even with long paths
+# enabled ("C1041: cannot open program database", "FTK1011: could not create the new file
+# tracking log file"). From frontend/src-tauri/target the longest of those paths is about
+# 290 characters; from here it is about 245.
+target-dir = "C:/sonix-build"

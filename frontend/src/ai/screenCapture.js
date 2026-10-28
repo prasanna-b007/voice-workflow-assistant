@@ -6,8 +6,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
  * The Sonix overlay is briefly hidden before the capture so it doesn't
  * appear in the screenshot, then restored immediately after.
  *
- * @returns {Promise<string>} Raw base64 JPEG (no data: prefix) suitable for
- *                            Gemini Vision inlineData.
+ * @returns {Promise<string>} Raw base64 JPEG (no data: prefix), for OCR and AI insights.
  */
 export async function captureScreen() {
   // Hide Sonix overlay so the underlying screen content is visible

@@ -22,7 +22,7 @@ import {
    ──────────────────────────────────────────── */
 const REPO_URL = "https://github.com/prasanna-b007/voice-workflow-assistant";
 // Tag and filename must match the GitHub Release produced by `npm run tauri build`.
-const INSTALLER_URL = `${REPO_URL}/releases/download/v0.1.0/Sonix_0.1.0_x64-setup.exe`;
+const INSTALLER_URL = `${REPO_URL}/releases/download/v0.2.0/Sonix_0.2.0_x64-setup.exe`;
 
 const handleDownloadClick = () => {
   fetch(INSTALLER_URL, { method: "HEAD" })
